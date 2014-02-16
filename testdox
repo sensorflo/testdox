@@ -1,0 +1,433 @@
+#!/usr/bin/python
+#
+# NAME
+#   testdox - Pretty print test names which are really specifications in prose
+#
+# SYNOPSIS
+#   1) testdox [OPTIONS] [FILE]...
+#   2) testdox -n [OPTIONS] [TESTNAME]...
+#
+# DESCRIPTION
+#   In the first form, pretty prints an annotated conveniently readable
+#   representation of test name identifiers found within FILEs. In the second
+#   form the test name identifiers are given directly on the command line.
+#
+#   The test names are really specifications in prose in the given when then
+#   sothat DSL. A test name is composed of four clauses, each of which is
+#   optional.
+#
+#   When parsing files, testdox recognizes test names which are the respective
+#   argument of Google test family of macros like e.g. TEST, TEST_F etc. The
+#   test name can also given using one of the MAKE_TEST_NAME family of macros.
+#
+# OPTIONS
+#   -b, --brief
+#     Prints the output in a brief, condensed form.
+#
+#   -f=<format>, --format=<format>
+#     Output format. Choices are 'txt' (default) or 'asciidoc'.
+#
+#   -n, --parse-name
+#     Interpret arguments as test names rather than files.
+#
+#   -t, --no-trailing-newline
+#     Do not output a trailing newline at the very end of the output.
+#
+#   FILE
+#     Files which are to be searched for test names.
+#
+#   TESTNAME
+#     Directly a test name.
+#
+# EXAMPLES
+#   Given a file foo.cpp with the following content
+#
+#     TEST(UnknownFake,
+#       Test_AddRef__increments_the_reference_count_and_returns_its_new_value)
+#     { ... }
+#
+#     TEST(UnknownFake, MAKE_TEST_NAME(
+#       Given_coclass_implements_multiple_interfaces,
+#       QuerryInterface,
+#       returns_the_same_ptr_for_all_IUnknown_interfaces_of_coclass))
+#     { ... }
+#
+#   the command
+#
+#     $ testdox foo.cpp
+#
+#   produces the output
+#
+#     File foo.cpp
+#     -------------
+#
+#     Test case UnknownFake
+#     ~~~~~~~~~~~~~~~~~~~~~
+#
+#     GIVEN (unspecified)
+#       WHEN AddRef is called
+#       THEN it increments the reference count and returns its new value
+#
+#     GIVEN coclass implements multiple interfaces
+#       WHEN QuerryInterface is called
+#       THEN it returns the same ptr for all IUnknown interfaces of coclass
+#
+# AUTHOR
+#   Written by Florian Kaufmann <sensorflo@gmail.com>. Inspired by testdox at
+#   http://agiledox.sourceforge.net/
+#
+# COPYRIGHT
+#   Florian Kaufmann 2014. License GPLv3+: GNU GPL version 3 or later
+#   <http://gnu.org/licenses/gpl.html>. This is free software: you are free to
+#   change and redistribute it. There is NO WARRANTY, to the extent permitted
+#   by law.
+#
+# SEE ALSO
+#   The project is hosted on GitHub: https://github.com/sensorflo/testdox
+
+
+# TODO
+#   - Also write method signature, that helps probably a lot when just reading
+#     the prose spec
+
+import re
+import sys
+import argparse
+import itertools
+
+def grouper(iterable, n, fillvalue=None):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
+    args = [iter(iterable)] * n
+    return itertools.izip_longest(fillvalue=fillvalue, *args)
+
+
+def print_file_title(file_name):
+    if args.parse_name or not file_name:
+        return
+    elif args.brief:
+        print("")
+        print("== File " + file_name)
+    else:
+        print("File " + file_name)
+        print("------" + len(file_name) * "-")
+        print("")
+
+
+def print_test_case_title(test_case_name):
+    if not test_case_name:
+        return
+    elif args.brief:
+        print("")
+        print("=== Test case " + test_case_name)
+    else:
+        print("Test case " + test_case_name)
+        print("~~~~~~~~~~" + len(test_case_name) * "~")
+        print("")
+
+
+def print_test_start():
+    if not args.brief:
+        return
+    if "txt" == args.format:
+        bullet = ""
+    elif "asciidoc" == args.format:
+        bullet = "- "
+    else:
+        sys.exit("invalid args.format")
+    sys.stdout.write(bullet)
+
+
+def print_test_end(is_last_test):
+    if is_last_test and args.no_trailing_newline:
+        return
+    elif "asciidoc" == args.format:
+        print("&nbsp;")
+        print("")
+    else:
+        print("")
+
+
+def print_clause(clause_type,clause,indent_cnt):
+
+    if not clause:
+        return
+
+    if "txt" == args.format:
+        indent = " " * indent_cnt
+        emphasis = ""
+        clause_delimiter = ""
+    elif "asciidoc" == args.format:
+        indent = "&nbsp;" * 4 * indent_cnt;
+        # indent = '[role="indented"]\n'
+        emphasis = "__"
+        clause_delimiter = "\n"
+    else:
+        sys.exit("invalid args.format")
+
+    # Split clause into parts, using AND|WITH as delimiters, and print. Print
+    # the 2+ part indented
+    parts_dels = re.split('_(AND|WITH|BUT)_', clause);
+    part0 = re.sub('_', ' ', parts_dels[0])
+    if args.brief and not ("AND"==clause_type or "WITH"==clause_type or "BUT"==clause_type):
+        # todo: and also only if its only a method name, aka 'xxx is called'
+        sys.stdout.write(clause_type + " " + part0 + " ")
+    elif args.brief and ("AND"==clause_type or "WITH"==clause_type or "BUT"==clause_type):
+        sys.stdout.write(clause_type + " " + part0 + " ")
+    else:
+        print(indent + emphasis + clause_type + emphasis + " " + part0 + clause_delimiter)
+    for delimiter,part in grouper(parts_dels[1:],2):
+        print_clause( delimiter, part, indent_cnt+1)
+    if args.brief and ("GIVEN"==clause_type or "WHEN"==clause_type):
+        sys.stdout.write("| ")
+
+
+def print_invalid_test(test_name):
+    if "txt" == args.format:
+        indent = "  "
+        clause_delimiter = ""
+    elif "asciidoc" == args.format:
+        # indent = '[role="indented"]\n'
+        indent = "  "
+        clause_delimiter = "\n"
+    else:
+        sys.exit("invalid args.format")
+    if args.brief:
+        sys.stdout.write('(invalid testname:) ' + re.sub('_',' ',test_name) + clause_delimiter)
+    else:
+        print("invalid test name format, printing it without annotation:")
+        print(indent + re.sub('_',' ',test_name) + clause_delimiter)
+
+
+def print_disabled_annotation():
+    if "txt" == args.format:
+        indent = "  "
+        emphasis = "!"
+    elif "asciidoc" == args.format:
+        indent = '[role="indented"]\n'
+        emphasis = "_"
+    else:
+        sys.exit("invalid args.format")
+    if args.brief:
+        sys.stdout.write('(disbaled test) ')
+    else:
+        print(indent + emphasis + "This test is disbaled!" + emphasis)
+
+
+def parse_test_name(test_name):
+    """Return match object essentially containing the given-when-then-sothat clauses"""
+    # content = any sequence of alpha-numeric-underscore except two underscores
+    # in a row
+    re_content = r'[a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*'
+    re_given = r'(?:(?:Given_)?(?P<given>' + re_content + r'))'
+    re_when = r'(?:(?:When_)?(?P<when>' + re_content + r'))'
+    re_then = r'(?:(?:Then_)?(?P<then>' + re_content + r'))'
+    re_sothat = r'(?:(?:(?P<sothat_keyword>SoThat|Because)_)?(?P<sothat>' + re_content + r'))'
+    re_direct_prefix = r'^((?P<disabled>DISABLED_)?(?:Test_))?'
+    def re_macro_prefix(s):
+        return r'^MAKE_(?P<disabled>DISABLED_)?TEST_NAME' + s + r'\s*\(\s*'
+    re_list = [ \
+        # -- clauses given directly as one identifier --
+        # all 4 clauses given
+        re_direct_prefix + re_given + '__' + re_when + '__' + re_then + '__' + re_sothat,
+        # only 3 clauses given
+        re_direct_prefix + re_given + '__' + re_when + '__' + re_then + '(?P<sothat_keyword>)(?P<sothat>)',
+        # only 2 clauses given
+        re_direct_prefix + '(?P<given>)' + re_when + '__' + re_then + '(?P<sothat_keyword>)(?P<sothat>)',\
+        # only 1 clause given. Order of prefence exactly as written, from highest to lowest
+        re_direct_prefix + '(' + re_when + '|' + re_then + '|' + re_given + ')(?P<sothat_keyword>)(?P<sothat>)',\
+
+        # -- clauses given seperately as arguments to a macro --
+        # all 4 clauses given
+        re_macro_prefix("4") + re_given + '\s*,\s*' + re_when + '\s*,\s*' + re_then + '\s*,\s*' + re_sothat + '\s*\)',\
+        # only 3 clauses given
+        re_macro_prefix("(?:3?)") + re_given + '\s*,\s*' + re_when + '\s*,\s*' + re_then + '\s*\)(?P<sothat_keyword>)(?P<sothat>)',\
+        # only 2 clauses given
+        re_macro_prefix("2") + '(?P<given>)' + re_when + '\s*,\s*' + re_then + '\s*\)(?P<sothat_keyword>)(?P<sothat>)', \
+        # only 1 clause given
+        re_macro_prefix("1") + '(' + re_when + '|' + re_then + '|' + re_given + ')\s*\)(?P<sothat_keyword>)(?P<sothat>)']
+
+    for r in re_list:
+        mo = re.match( r + r'$', test_name, re.I + re.S )
+        if mo:
+            return mo
+    return None
+
+
+def extract_tests(filename_or_testname):
+    """Returns a list of pairs [testcasename,testname]"""
+    if args.parse_name:
+        return [[None,filename_or_testname]]
+    else:
+        return extract_tests_from_file(filename_or_testname)
+
+
+def extract_tests_from_file(file_name):
+    """Extracts tests from the file with path file_name.
+    Returns them as a list of [testcase_name,test_name] elements"""
+    tests = []
+    try:
+        if file_name == '-':
+            f = sys.stdin
+        else:
+            f = open(file_name, 'r')
+    except IOError:
+        sys.stderr.write("Could not open file '" + file_name + "' for reading\n")
+    else:
+        re_test_macro_name = r'\b(?:TEST|TEST_F|TYPED_TEST_P|TYPED_TEST)\b'
+        test_iter = re.finditer(
+            re_test_macro_name + '\s*\(\s*' +
+            r'(?P<disabled>DISABLED_)?(?P<testcase_name>[^, \t]*)' +
+            r'\s*,\s*' +
+            # since test name can be a macro, allow one level of nested
+            # parantheses
+            r'(?P<test_name>([^()]|\([^()]*?\))*?)\s*' +
+            r'\)',
+            f.read(), re.S )
+        for mo in test_iter:
+            tests.append( [mo.group('testcase_name'), mo.group('test_name')] )
+        if f is not sys.stdin:
+            f.close()
+    return tests
+
+
+def rephrase_given_clause(given_clause_raw):
+    if given_clause_raw:
+        return given_clause_raw
+    elif args.brief:
+        return ""
+    else:
+        return "(unspecified)"
+
+
+# insert 'is called' if it makes sense
+def rephrase_when_clause(when_clause_raw):
+    is_called_present = False
+    when_clause = when_clause_raw # might be overwritten again below
+    if not when_clause_raw:
+        if args.brief:
+            when_clause = ""
+        else:
+            when_clause = "(unspecified)"
+    else:
+        name = r'[A-Za-z0-9]+'
+
+        # the order of the elements in the | list is important:
+        # ...cast...operator: must be before the other operator elements in
+        # the | list since else the others match parts of this one only name:
+        # must be last since it also matches parts of previous element of the
+        # | list
+        meth_name = \
+            r'(?:cast|conversion)_operator_(?:to_)?' + name + r'|' +\
+            name + r'(?:_operator)?|' +\
+            r'(?:operator_)?' + name + r'|' +\
+            name;
+        mo2 = re.search( r'(?P<meth>(?:' + meth_name + r'))' +
+                         r'(?P<iscalled>_[Ii]s_[Cc]alled)?' +
+                         r'(?P<with>(_WITH_)?)' +
+                         r'(?P<rest>.*)',
+                         when_clause_raw )
+        if mo2.group('iscalled'):
+            is_called_present = True
+        elif mo2.group('with') or not mo2.group('rest'):
+            when_clause = mo2.group('meth') + ' is called ' + \
+                mo2.group('with') + mo2.group('rest')
+            is_called_present = True
+    return (when_clause,is_called_present)
+
+
+# insert 'it ' if it makes sense
+def rephrase_then_clause(then_clause_raw,is_called_present):
+    if not then_clause_raw:
+        if args.brief:
+            return ""
+        else:
+            return "(unspecified)"
+    elif is_called_present and not re.match( r'it_', then_clause_raw, re.I ):
+        return 'it ' + then_clause_raw
+    else:
+        return then_clause_raw
+
+
+def rephrase_sothat_clause(sothat_clause_raw):
+    return sothat_clause_raw
+
+
+def rephrase_sothat_keyword(sothat_keyword_raw):
+    if not sothat_keyword_raw:
+        return "SO THAT"
+    sothat_keyword_raw_upper = sothat_keyword_raw.upper()
+    if sothat_keyword_raw_upper == "SOTHAT":
+        return "SO THAT"
+    else:
+        return sothat_keyword_raw_upper
+
+
+def extract_and_rephrase(filename_or_testname):
+    rephrased_tests = []
+    for (testcase_name,test_name) in extract_tests(filename_or_testname):
+        mo = parse_test_name(test_name)
+        if not mo:
+            invalid_test_name = test_name
+            disabled = None
+            given_clause = None
+            when_clause = None
+            then_clause = None
+            sothat_clause = None
+            sothat_keyword = None
+        else:
+            invalid_test_name = None
+            disabled = mo.group('disabled')
+            given_clause = rephrase_given_clause( mo.group('given') )
+            (when_clause,is_called_present) = rephrase_when_clause( mo.group('when') )
+            then_clause = rephrase_then_clause( mo.group('then'), is_called_present )
+            sothat_clause = rephrase_sothat_clause( mo.group('sothat') )
+            sothat_keyword = rephrase_sothat_keyword( mo.group('sothat_keyword') )
+        rephrased_tests.append( [testcase_name, invalid_test_name, disabled,
+                                 given_clause, when_clause, then_clause, sothat_clause,
+                                 sothat_keyword] )
+    return rephrased_tests
+
+
+
+def parse_file_or_testname(filename_or_testname):
+    rephrased_tests = extract_and_rephrase(filename_or_testname)
+
+    # sort and print tests
+    print_file_title(filename_or_testname)
+    old_testcase_name = None
+    for test in rephrased_tests:
+        (testcase_name, invalid_test_name, disabled, given_clause,
+         when_clause, then_clause, sothat_clause, sothat_keyword) = test
+        is_last_test = test == rephrased_tests[-1]
+
+        if testcase_name != old_testcase_name:
+            print_test_case_title(testcase_name)
+        if invalid_test_name:
+            print_invalid_test(invalid_test_name)
+        if disabled:
+            print_disabled_annotation()
+        print_test_start()
+        if args.brief and not given_clause:
+            indent_cnt = 0
+        else:
+            print_clause("GIVEN", given_clause, 0)
+            indent_cnt = 2
+        print_clause("WHEN", when_clause, indent_cnt)
+        print_clause("THEN", then_clause, indent_cnt)
+        print_clause(sothat_keyword, sothat_clause, indent_cnt)
+        print_test_end(is_last_test)
+
+        old_testcase_name = testcase_name
+
+
+argparser = argparse.ArgumentParser(description="Prints test names found in FILEs in an annotated form.")
+argparser.add_argument('files_or_names', nargs='*', help='files or names to parse. "-" stands for STDIN')
+argparser.add_argument('-b','--brief', help='brief output', action='store_true', default=False)
+argparser.add_argument('-n','--parse-name', help='parse name instead file', action='store_true', default=False)
+argparser.add_argument('-f','--format', help='output format', default='txt', choices=['txt','asciidoc'])
+argparser.add_argument('-t','--no-trailing-newline', help='do not output the trailing newline', action='store_true', default=False)
+args = argparser.parse_args()
+
+for filename_or_testname in args.files_or_names:
+    parse_file_or_testname(filename_or_testname)
